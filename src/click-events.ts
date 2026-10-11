@@ -69,24 +69,42 @@ export class RabbitClickQueue {
 
     async start(): Promise<void> {
         this.stopping = false;
-        this.connection = await connect(this.url, {
-            recovery: {
-                waitForConnect: false,
-                initialDelay: 500,
-                maxDelay: 10_000,
-                maxRetries: Infinity,
-                setup: async (model: ChannelModel) => this.setupChannels(model),
-            },
-        });
-        this.connection.on('error', (error) => console.error('RabbitMQ connection error:', error));
-        this.connection.on('disconnect', (error) => {
-            this.ready = false;
-            console.error('RabbitMQ disconnected; reconnecting:', error.message);
-        });
-        this.connection.on('reconnect-scheduled', ({ attempt, delay }) => {
-            console.warn(`RabbitMQ reconnect attempt ${attempt} in ${delay}ms`);
-        });
         this.dispatcher = this.dispatchOutbox();
+        void this.connectUntilReady();
+    }
+
+    private async connectUntilReady(): Promise<void> {
+        let delay = 500;
+        while (!this.stopping && !this.connection) {
+            try {
+                const connection = await connect(this.url, {
+                    recovery: {
+                        waitForConnect: false,
+                        initialDelay: 500,
+                        maxDelay: 10_000,
+                        maxRetries: Infinity,
+                        setup: async (model: ChannelModel) => this.setupChannels(model),
+                    },
+                });
+                if (this.stopping) {
+                    await connection.close();
+                    return;
+                }
+                this.connection = connection;
+                connection.on('error', (error) => console.error('RabbitMQ connection error:', error));
+                connection.on('disconnect', (error) => {
+                    this.ready = false;
+                    console.error('RabbitMQ disconnected; reconnecting:', error.message);
+                });
+                connection.on('reconnect-scheduled', ({ attempt, delay: retryDelay }) => {
+                    console.warn(`RabbitMQ reconnect attempt ${attempt} in ${retryDelay}ms`);
+                });
+            } catch (error) {
+                console.error(`Could not connect to RabbitMQ; retrying in ${delay}ms:`, error);
+                await new Promise((resolve) => setTimeout(resolve, delay));
+                delay = Math.min(delay * 2, 10_000);
+            }
+        }
     }
 
     private async setupChannels(model: ChannelModel): Promise<void> {
