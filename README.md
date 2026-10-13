@@ -106,16 +106,33 @@ The repository also contains a Cloudflare Worker API in `cloudflare-worker/`. It
 
 The Worker uses the same keyed Feistel permutation and Base62 encoding as the Express API. Keep `SHORT_CODE_SECRET` stable and identical across Worker instances. Existing links are stored in D1 and remain resolvable if the secret changes, but changing it can make newly generated codes collide with codes created under the previous secret.
 
-To deploy with Wrangler:
+To deploy from Windows with the restricted token helper:
+
+1. In Cloudflare, create a custom API token with **Account → D1 → Edit** and **Account → Workers Scripts → Edit**. Limit both permissions to the account that will host this project. Do not add Zone, DNS, Billing, or other product permissions. Cloudflare documents that Wrangler's OAuth login does not support granular scopes; account-owned tokens do. See [Workers authorization](https://developers.cloudflare.com/workers/authorization/) and [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
+2. Install the Worker dependencies once:
+
+   ```powershell
+   cd cloudflare-worker
+   npm.cmd ci
+   ```
+
+3. Run the deployment helper. It asks for the account ID and reads the token with hidden input; the token is held only in the script process, not written to the repo. It creates or reuses the D1 database, applies migrations, saves a generated short-code secret to the Git-ignored `.dev.vars`, uploads that secret, and deploys the Worker.
+
+   ```powershell
+   .\deploy.ps1
+   ```
+
+The Cloudflare account ID is shown in the account overview page. The token needs D1 Edit to create and migrate the database, and Workers Scripts Edit to publish the Worker. Set both token permissions to this one account. Do not paste the token into chat, commit it, or store it in `wrangler.jsonc`.
+
+If you prefer to run Wrangler commands manually, install dependencies and create the database:
 
 ```bash
 cd cloudflare-worker
-npm install
-npx wrangler login
+npm ci
 npx wrangler d1 create url-shortener
 ```
 
-Copy the `database_id` returned by Wrangler into `cloudflare-worker/wrangler.jsonc` in place of `REPLACE_WITH_D1_DATABASE_ID`. Then apply the schema, add the secret, and deploy:
+Copy the `database_id` returned by Wrangler into `wrangler.jsonc` in place of `REPLACE_WITH_D1_DATABASE_ID`. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the same shell, then apply the schema, add a stable secret, and deploy:
 
 ```bash
 npx wrangler d1 migrations apply url-shortener --remote
