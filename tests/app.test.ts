@@ -186,6 +186,17 @@ test('exposes liveness and readiness health checks', async () => {
     assert.deepEqual(await ready.json(), { status: 'ready', rabbitmq: 'ready' });
 });
 
+test('reports direct click-event mode without requiring RabbitMQ readiness', async () => {
+    const directBaseUrl = await listenApp(createApp(
+        createMemoryDb(), createTestSequence(), testSecret,
+        { publish: async () => {} },
+        { mongo: async () => {}, counter: async () => {}, clickEventsMode: 'direct' },
+    ));
+    const response = await fetch(`${directBaseUrl}/health/ready`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { status: 'ready', clickEvents: 'direct' });
+});
+
 test('fails readiness when a required dependency is unavailable', async () => {
     const unhealthyBaseUrl = await listenApp(createApp(
         createMemoryDb(), createTestSequence(), testSecret,

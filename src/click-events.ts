@@ -40,6 +40,19 @@ export class MongoClickOutbox {
     }
 }
 
+/** Records clicks directly for serverless deployments without a background worker. */
+export class MongoClickEventWriter {
+    private readonly db: Db;
+
+    constructor(db: Db) {
+        this.db = db;
+    }
+
+    async publish(event: ClickEvent): Promise<void> {
+        await persistClickEvent(this.db, event);
+    }
+}
+
 export async function persistClickEvent(db: Db, event: ClickEvent): Promise<void> {
     if (!event.eventId || !event.shortCode || !Number.isFinite(Date.parse(event.clickedAt))) {
         throw new Error('Malformed click event');

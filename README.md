@@ -34,6 +34,7 @@ To stop the services, press `Ctrl+C` and run `docker compose down`. To also dele
 | `RABBITMQ_PASSWORD` | Development-only password | Local RabbitMQ password. |
 | `MONGODB_DB` | `url-shortener` | Database name used by the API. |
 | `CACHE_ENABLED` | `true` | Enables or disables redirect caching. |
+| `CLICK_EVENTS_MODE` | `outbox` | `outbox` uses MongoDB outbox + RabbitMQ worker; `direct` writes idempotent click events to MongoDB in the request, for serverless demo deployments. |
 | `SHORT_CODE_SECRET` | Compose development secret | Shared secret used to permute IDs before Base62 encoding. |
 
 Inside the Compose network, the API connects to MongoDB at `mongo:27017`, the cache at `redis:6379`, and the persistent counter at `redis-counter:6379`. The cache is disposable; the counter uses AOF with `appendfsync always` and the `redis_counter_data` volume. This favors write durability at the cost of counter-write latency. [Redis persistence documentation](https://redis.io/docs/latest/management/persistence/).
@@ -41,6 +42,8 @@ Inside the Compose network, the API connects to MongoDB at `mongo:27017`, the ca
 RabbitMQ stores the durable `url-shortener.click-events` queue in the `rabbitmq_data` volume. The API first writes each click to the MongoDB `click_outbox` collection and then returns a `302`, without waiting for RabbitMQ. A background dispatcher publishes pending events when the broker is available and marks them as published after a publisher confirmation. If it crashes between those steps, it may publish the event again; the worker uses `eventId` as the unique `_id` in `click_events`, so redelivery does not duplicate the recorded click. The worker acknowledges a message only after MongoDB persists it. Published outbox documents are retained for seven days; pending documents are retried with backoff and do not expire automatically. The local RabbitMQ management UI is at `http://localhost:15672`.
 
 If RabbitMQ is unavailable, redirects continue while MongoDB can accept outbox writes. If an outbox write fails, the API still redirects and logs the error, but that click may be missing from analytics. `GET /api/v1/:shortCode/stats` returns the count persisted in `click_events`; it is eventually consistent.
+
+For a serverless portfolio deployment, set `CLICK_EVENTS_MODE=direct`. The API writes each click to `click_events` using the event ID as MongoDB's unique `_id`, so persisting the same event again does not duplicate it. It does not start the RabbitMQ consumer or outbox dispatcher. Readiness reports `{ "status": "ready", "clickEvents": "direct" }`; MongoDB and the Redis counter remain required. This mode trades the queue and outbox workflow for simpler request-driven execution. The normal Compose mode remains `outbox` and demonstrates asynchronous delivery with RabbitMQ.
 
 `GET /health/live` reports whether the process is running. `GET /health/ready` returns `503` if MongoDB or Redis is unavailable. If RabbitMQ is down, it still returns `200` with `"rabbitmq":"degraded"`, because click events can wait in the outbox. Compose waits for the API to become ready before starting the frontend and does not block API startup on RabbitMQ availability.
 
@@ -136,11 +139,11 @@ HTTP and HTTPS URLs up to 2048 characters are accepted. Links expire after five 
 
 `GET /api/v1/:shortCode`
 
-A request such as `GET /api/v1/8GmP4dJr7Qk` writes a click event to the MongoDB outbox and returns `302 Found` to the destination. The event is sent to RabbitMQ in the background. Unknown or expired codes return `404`.
+A request such as `GET /api/v1/8GmP4dJr7Qk` records a click and returns `302 Found` to the destination. In `outbox` mode it first writes the event to MongoDB's outbox for asynchronous RabbitMQ delivery; in `direct` mode it writes idempotently to `click_events` in the request. Unknown or expired codes return `404`.
 
 ### Click count
 
-`GET /api/v1/:shortCode/stats` returns the click count persisted in `click_events`. The result is eventually consistent because a background worker consumes the queue.
+`GET /api/v1/:shortCode/stats` returns the click count persisted in `click_events`. The result is eventually consistent in `outbox` mode because a background worker consumes the queue; in `direct` mode, the event is written before the redirect response when MongoDB is available.
 
 ## Architecture and decisions
 

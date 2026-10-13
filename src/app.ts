@@ -31,7 +31,8 @@ export type ClickEventPublisher = {
 export type HealthChecks = {
     mongo(): Promise<void>;
     counter(): Promise<void>;
-    queue(): Promise<void>;
+    queue?: () => Promise<void>;
+    clickEventsMode?: 'outbox' | 'direct';
 };
 
 function createLinkRateLimiter() {
@@ -112,9 +113,13 @@ export function createApp(
         } catch {
             return res.status(503).json({ status: 'not_ready' });
         }
+        if (healthChecks.clickEventsMode === 'direct') {
+            return res.status(200).json({ status: 'ready', clickEvents: 'direct' });
+        }
+
         let rabbitmq = 'ready';
         try {
-            await healthChecks.queue();
+            await healthChecks.queue?.();
         } catch {
             rabbitmq = 'degraded';
         }

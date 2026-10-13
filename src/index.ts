@@ -1,7 +1,7 @@
 import { MongoClient } from 'mongodb';
 import { createClient } from 'redis';
-import { createApp } from './app.ts';
-import { MongoClickOutbox, RabbitClickQueue } from './click-events.ts';
+import { createApp, type ClickEventPublisher } from './app.ts';
+import { MongoClickEventWriter, MongoClickOutbox, RabbitClickQueue } from './click-events.ts';
 
 const port = Number(process.env.PORT ?? 3000);
 const mongoUri = process.env.MONGODB_URI ?? 'mongodb://localhost:27017';
@@ -11,6 +11,7 @@ const counterRedisUrl = process.env.COUNTER_REDIS_URL ?? 'redis://localhost:6381
 const rabbitMqUrl = process.env.RABBITMQ_URL ?? 'amqp://localhost:5672';
 const cacheEnabled = process.env.CACHE_ENABLED !== 'false';
 const shortCodeSecret = process.env.SHORT_CODE_SECRET ?? '';
+const clickEventsMode = process.env.CLICK_EVENTS_MODE ?? 'outbox';
 const counterId = 'short-url-sequence';
 const counterKey = 'url-shortener:short-code-sequence:v1';
 
@@ -27,6 +28,9 @@ const ensureCounterScript = `
 async function startServer(): Promise<void> {
     if (Buffer.byteLength(shortCodeSecret, 'utf8') < 32) {
         throw new Error('Set SHORT_CODE_SECRET to a stable secret of at least 32 bytes');
+    }
+    if (clickEventsMode !== 'outbox' && clickEventsMode !== 'direct') {
+        throw new Error('CLICK_EVENTS_MODE must be either "outbox" or "direct"');
     }
 
     const mongoClient = new MongoClient(mongoUri);
@@ -56,13 +60,15 @@ async function startServer(): Promise<void> {
             { expiresAt: 1 },
             { expireAfterSeconds: 0, name: 'expiresAt_ttl' },
         );
-        const clickOutbox = db.collection('click_outbox');
-        await clickOutbox.createIndex({ status: 1, retryAt: 1, createdAt: 1 }, { name: 'outbox_pending' });
-        await clickOutbox.createIndex({ status: 1, leaseUntil: 1 }, { name: 'outbox_lease' });
-        await clickOutbox.createIndex(
-            { publishedAt: 1 },
-            { expireAfterSeconds: 604_800, name: 'outbox_published_ttl' },
-        );
+        if (clickEventsMode === 'outbox') {
+            const clickOutbox = db.collection('click_outbox');
+            await clickOutbox.createIndex({ status: 1, retryAt: 1, createdAt: 1 }, { name: 'outbox_pending' });
+            await clickOutbox.createIndex({ status: 1, leaseUntil: 1 }, { name: 'outbox_lease' });
+            await clickOutbox.createIndex(
+                { publishedAt: 1 },
+                { expireAfterSeconds: 604_800, name: 'outbox_published_ttl' },
+            );
+        }
 
         counterRedisClient = createClient({ url: counterRedisUrl });
         counterRedisClient.on('error', (error) => console.error('Counter Redis client error:', error));
@@ -142,16 +148,25 @@ async function startServer(): Promise<void> {
             },
         } : undefined;
 
-        clickQueue = new RabbitClickQueue(rabbitMqUrl, db);
-        await clickQueue.start();
-        const clickEvents = new MongoClickOutbox(db);
+        let clickEvents: ClickEventPublisher;
+        if (clickEventsMode === 'outbox') {
+            clickQueue = new RabbitClickQueue(rabbitMqUrl, db);
+            await clickQueue.start();
+            clickEvents = new MongoClickOutbox(db);
+        } else {
+            clickEvents = new MongoClickEventWriter(db);
+        }
         const healthChecks = {
+            clickEventsMode,
             mongo: async () => { await db.command({ ping: 1 }); },
             counter: async () => { await counterRedisClient!.sendCommand(['PING']); },
-            queue: async () => { await clickQueue!.check(); },
+            queue: async () => {
+                if (!clickQueue) throw new Error('RabbitMQ is disabled in direct click-event mode');
+                await clickQueue.check();
+            },
         };
 
-        console.log(`Connected to MongoDB database "${databaseName}" and durable Redis counter`);
+        console.log(`Connected to MongoDB database "${databaseName}" and durable Redis counter; click events use ${clickEventsMode} mode`);
         const server = createApp(db, idSequence, shortCodeSecret, clickEvents, healthChecks, cache).listen(port, () => {
             console.log(`Server is running on http://localhost:${port}`);
         });
