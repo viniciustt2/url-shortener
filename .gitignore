@@ -26,6 +26,8 @@ pnpm-debug.log*
 
 # Deployment / local tooling
 .vercel/
+.wrangler/
+**/.dev.vars*
 .idea/
 .vscode/*
 !.vscode/extensions.json

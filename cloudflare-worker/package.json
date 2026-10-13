@@ -1,0 +1,14 @@
+{
+  "name": "url-shortener-cloudflare-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --experimental-strip-types --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.36.0"
+  }
+}

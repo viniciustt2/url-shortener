@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "url-shortener-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-12",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "url-shortener",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "CREATE_LINK_LIMITER",
+      "namespace_id": "736501812",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
+  "triggers": {
+    "crons": ["0 3 * * *"]
+  }
+}

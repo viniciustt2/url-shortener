@@ -100,6 +100,37 @@ Replace `<username>` and `<password>` with your MongoDB credentials. If the user
 
 The server also accepts `PORT`, which defaults to `3000`. For local development, the Compose service `redis` exposes the cache on port `6380`, and `redis-counter` exposes the counter on port `6381`.
 
+## Deploy a free serverless demo to Cloudflare
+
+The repository also contains a Cloudflare Worker API in `cloudflare-worker/`. It uses D1 for links, the global numeric ID counter, and click events. This hosted demo keeps the same `/api/v1` endpoints used by the frontend. It does not run MongoDB, Redis, RabbitMQ, or the outbox; those remain part of the local Compose architecture above. Click events are written directly to D1 before the redirect, and a metrics write failure is logged without blocking navigation.
+
+The Worker uses the same keyed Feistel permutation and Base62 encoding as the Express API. Keep `SHORT_CODE_SECRET` stable and identical across Worker instances. Existing links are stored in D1 and remain resolvable if the secret changes, but changing it can make newly generated codes collide with codes created under the previous secret.
+
+To deploy with Wrangler:
+
+```bash
+cd cloudflare-worker
+npm install
+npx wrangler login
+npx wrangler d1 create url-shortener
+```
+
+Copy the `database_id` returned by Wrangler into `cloudflare-worker/wrangler.jsonc` in place of `REPLACE_WITH_D1_DATABASE_ID`. Then apply the schema, add the secret, and deploy:
+
+```bash
+npx wrangler d1 migrations apply url-shortener --remote
+npx wrangler secret put SHORT_CODE_SECRET
+npm run deploy
+```
+
+Use a random secret with at least 32 bytes. Do not put it in `wrangler.jsonc`, commit it, or use the local development secret. After deployment, check `https://<worker-name>.<account-subdomain>.workers.dev/health/ready`.
+
+For the Vercel frontend, set the server-side environment variable `BACKEND_API_URL` to the Worker origin, for example `https://url-shortener-api.<account-subdomain>.workers.dev`, then redeploy the frontend. The Next.js server routes proxy API calls, so the browser does not need direct access to the Worker.
+
+Cloudflare's current free quotas are finite: Workers allow up to 100,000 requests per day and D1 provides 5 million rows read and 100,000 rows written per day, with 5 GB of total storage across the account. These limits suit a portfolio demo, but D1 queries fail after a daily quota is exhausted until it resets. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [D1 pricing and quotas](https://developers.cloudflare.com/d1/platform/pricing/).
+
+The Worker has a daily scheduled cleanup that deletes click events and links after their five-year expiration. D1 is the source of truth; unlike the local Compose setup, this serverless demo has no separate cache or message queue.
+
 ## Tests
 
 Run the automated tests with:
